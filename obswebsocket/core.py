@@ -32,7 +32,7 @@ class obsws:
     For advanced usage, including events callback, see the 'samples' directory.
     """
 
-    def __init__(self, host = 'localhost', port = 4444, password = ''):
+    def __init__(self, host = 'localhost', port = 4444, password = '', timeout = 60, reconnect_on_errors = False):
         """
         Construct a new obsws wrapper
 
@@ -40,6 +40,8 @@ class obsws:
         :param port: TCP Port to connect to (Default is 4444)
         :param password: Password for the websocket server (Leave this field empty if no auth enabled
             on the server)
+        :param timeout: Message timeout when expecting an answer from the server
+        :param reconnect_on_errors: Whenever to reconnect automaticaly on an unexpected error
         """
         self.id = 1
         self.thread_recv = None
@@ -49,6 +51,8 @@ class obsws:
         self.host = host
         self.port = port
         self.password = password
+        self.timeout = timeout
+        self.reconnect_on_errors = reconnect_on_errors
 
     def connect(self, host = None, port = None):
         """
@@ -156,11 +160,19 @@ class obsws:
         self.id += 1
         data["message-id"] = id
         LOG.debug("Sending message id {}: {}".format(id, data))
-        self.ws.send(json.dumps(data))
+        try:
+            self.ws.send(json.dumps(data))
+        except BrokenPipeError as e:
+            LOG.error("Error sending message id {}: {}. Caught exception: {}".format(id, data, e))
+            if self.reconnect_on_errors:
+                self.reconnect()
+            else:
+                self.disconnect()
+            return None
         return self._waitmessage(id)
 
     def _waitmessage(self, id):
-        timeout = time.time() + 60 # Timeout = 60s
+        timeout = time.time() + self.timeout
         while time.time() < timeout:
             if id in self.answers:
                 return self.answers.pop(id)
@@ -219,9 +231,13 @@ class RecvThread(threading.Thread):
                     self.core.answers[result['message-id']] = result
                 else:
                     LOG.warning("Unknow message: {}".format(result))
-            except websocket.WebSocketConnectionClosedException:
+            except (websocket.WebSocketConnectionClosedException, ConnectionResetError) as e:
+                LOG.error("Lower level socket exception: {}".format(e))
                 if self.running:
-                    self.core.reconnect()
+                    if self.core.reconnect_on_errors:
+                        self.core.reconnect()
+                    else:
+                        self.core.disconnect()
             except (ValueError, exceptions.ObjectError) as e:
                 LOG.warning("Invalid message: {} ({})".format(message, e))
         # end while
