@@ -54,6 +54,8 @@ class obsws:
         self.timeout = timeout
         self.reconnect_on_errors = reconnect_on_errors
 
+        self.startup_time = None
+
     def connect(self, host = None, port = None):
         """
         Connect to the websocket server
@@ -70,6 +72,7 @@ class obsws:
             LOG.info("Connecting...")
             self.ws.connect("ws://{}:{}".format(self.host, self.port))
             LOG.info("Connected!")
+            self.startup_time = time.time()
             self._auth(self.password)
             self._run_threads()
         except socket.error as e:
@@ -86,6 +89,11 @@ class obsws:
         except Exception:
             # TODO: Need to catch more precise exception
             pass
+        if self.startup_time:
+            if self.startup_time < ( time.time() - 30):
+                # Prevent too quick reconnections
+                raise exceptions.ConnectionFailure('Reconnected too quickly')
+
         self.connect()
 
     def disconnect(self):
